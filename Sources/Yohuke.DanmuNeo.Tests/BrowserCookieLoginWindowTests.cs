@@ -102,6 +102,30 @@ public class BrowserCookieLoginWindowTests
     }
 
     /// <summary>
+    /// WPE 删除 Cookie 时写入同名、同域、同路径的已过期 Cookie。
+    /// </summary>
+    [Fact]
+    public void ExpiredCookieKeepsIdentityAndExpiresInPast()
+    {
+        var original = new Cookie("SESSDATA", "test-session", "/", ".bilibili.com")
+        {
+            Secure = true,
+            HttpOnly = true,
+            Expires = DateTime.UtcNow.AddDays(30)
+        };
+
+        var expired = BrowserCookieLoginWindow.CreateExpiredCookie(original);
+
+        Assert.Equal(original.Name, expired.Name);
+        Assert.Equal(original.Domain, expired.Domain);
+        Assert.Equal(original.Path, expired.Path);
+        Assert.True(expired.Secure);
+        Assert.True(expired.HttpOnly);
+        Assert.Empty(expired.Value);
+        Assert.True(expired.Expires.ToUniversalTime() < DateTime.UtcNow);
+    }
+
+    /// <summary>
     /// 抓取失败时不删除浏览器 Cookie，便于用户重试。
     /// </summary>
     [AvaloniaFact]

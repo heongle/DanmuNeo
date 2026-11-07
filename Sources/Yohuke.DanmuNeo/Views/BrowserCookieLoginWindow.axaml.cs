@@ -208,7 +208,7 @@ public partial class BrowserCookieLoginWindow : Window
             try
             {
                 var cookies = await cookieManager.GetCookiesAsync();
-                DeleteBilibiliCookies(cookies, cookie => cookieManager.DeleteCookie(cookie.Name, cookie.Domain, cookie.Path));
+                DeleteBilibiliCookies(cookies, cookie => cookieManager.AddOrUpdateCookie(CreateExpiredCookie(cookie)));
             }
             catch (Exception exception)
             {
@@ -339,6 +339,23 @@ public partial class BrowserCookieLoginWindow : Window
 
     private void DeleteBrowserCookie(Cookie cookie)
     {
-        webView?.TryGetCookieManager()?.DeleteCookie(cookie.Name, cookie.Domain, cookie.Path);
+        webView?.TryGetCookieManager()?.AddOrUpdateCookie(CreateExpiredCookie(cookie));
+    }
+
+    /// <summary>
+    /// 生成同名、同域、同路径的已过期 Cookie，用于删除 WPE 中的 Cookie。
+    /// </summary>
+    /// <remarks>
+    /// Avalonia.Controls.WebView 11.4.0 的 WPE DeleteCookie 以空值构造 Cookie，而 libsoup 删除时要求值也相同，
+    /// 因此永远删不掉；写入已过期的同名 Cookie 时 libsoup 只按名称、域和路径匹配并移除旧 Cookie。
+    /// </remarks>
+    internal static Cookie CreateExpiredCookie(Cookie cookie)
+    {
+        return new Cookie(cookie.Name, string.Empty, cookie.Path, cookie.Domain)
+        {
+            Secure = cookie.Secure,
+            HttpOnly = cookie.HttpOnly,
+            Expires = DateTime.UtcNow.AddDays(-1)
+        };
     }
 }

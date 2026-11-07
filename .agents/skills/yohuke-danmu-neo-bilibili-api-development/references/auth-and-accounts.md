@@ -13,6 +13,8 @@
 
 1. B 站登录 URI 为 `https://passport.bilibili.com/login`。
 2. 为 B 站与 QQ 音乐使用独立持久化 profile，避免 Cookie 串平台；不要每次随机 profile，否则用户需要重复登录。
+   - 例外：Linux WPE（`LinuxWpeWebViewEnvironmentRequestedEventArgs`）不设置 `DataDirectory`/`CacheDirectory`。Avalonia.Controls.WebView 11.4.0 会为这两个目录新建 NetworkSession 却不交给 WebView，导致 CookieManager 读到空会话。WPE 因此使用默认会话：B 站登录窗口在导航前删除残留的 bilibili.com/biligame.com Cookie，抓取成功后再次删除，以保证每次从未登录开始、支持多账号。只删本地 Cookie，不在页面退出登录，否则服务端会注销刚抓取的 SESSDATA。上游修复后再恢复目录设置。
+   - Linux 上 WPE 需要无版本号 `.so` 链接（通常来自 `-devel` 包），否则回退到不支持 CookieManager 的 WebKitGTK 3。
 3. WebView 打开后由用户完成登录；点击“完成并抓取 Cookie”时调用 `TryGetCookieManager()` 与 `GetCookiesAsync()`。
 4. `BrowserCookieLoginService.CreateResult` 将 Cookie 名称按大小写不敏感字典处理。
 5. B 站只保留当前 API 需要的 `buvid3`、`SESSDATA`、`bili_jct`、`DedeUserID/DedeUserId`，再经 `ApiCookieHelper.CreateBilibiliCookie` 规范化。

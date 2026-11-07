@@ -24,6 +24,10 @@ public partial class BrowserCookieLoginWindow : Window
     private object[] statusArguments = [];
     private string? rawStatus;
     private bool browserInitializationFailed;
+    private bool usesWpeBackend;
+    private bool hasNavigated;
+
+    private bool ShouldClearBilibiliCookies => usesWpeBackend && platform == BrowserLoginPlatform.Bilibili;
 
     /// <summary>
     /// 初始化内嵌浏览器登录窗口。
@@ -111,6 +115,7 @@ public partial class BrowserCookieLoginWindow : Window
         if (currentWebView is not null)
         {
             currentWebView.EnvironmentRequested -= WebView_OnEnvironmentRequested;
+            currentWebView.AdapterCreated -= WebView_OnAdapterCreated;
             currentWebView.NavigationCompleted -= WebView_OnNavigationCompleted;
 
             try
@@ -130,11 +135,10 @@ public partial class BrowserCookieLoginWindow : Window
     {
         try
         {
-            var loginUri = loginService.GetLoginUri(platform);
             webView = createWebView();
             webView.EnvironmentRequested += WebView_OnEnvironmentRequested;
+            webView.AdapterCreated += WebView_OnAdapterCreated;
             webView.NavigationCompleted += WebView_OnNavigationCompleted;
-            webView.Source = loginUri;
             WebViewHost.Child = webView;
             WebViewPlaceholderText.IsVisible = false;
             StartupLog.Append(Localization.Format("UI.BrowserCookieLoginWindow.BrowserCreated", platform));
@@ -179,11 +183,60 @@ public partial class BrowserCookieLoginWindow : Window
                 gtk.BaseDataDirectory = profileDirectory;
                 gtk.BaseCacheDirectory = cacheDirectory;
                 break;
-            case LinuxWpeWebViewEnvironmentRequestedEventArgs wpe:
-                wpe.DataDirectory = profileDirectory;
-                wpe.CacheDirectory = cacheDirectory;
+            case LinuxWpeWebViewEnvironmentRequestedEventArgs:
+                // Avalonia.Controls.WebView 11.4.0 的 WPE 适配器在设置 DataDirectory/CacheDirectory 时会新建
+                // NetworkSession，但没有把它交给 WebView：页面仍使用默认会话，CookieManager 却读取空的新会话。
+                // 因此保持默认会话，并在登录前后清除 B 站 Cookie 以替代隔离 profile；上游修复后可恢复目录设置。
+                usesWpeBackend = true;
                 break;
         }
+    }
+
+    private async void WebView_OnAdapterCreated(object? sender, WebViewAdapterEventArgs e)
+    {
+        var currentWebView = webView;
+
+        if (currentWebView is null || !ReferenceEquals(sender, currentWebView) || hasNavigated)
+        {
+            return;
+        }
+
+        hasNavigated = true;
+
+        if (ShouldClearBilibiliCookies && currentWebView.TryGetCookieManager() is { } cookieManager)
+        {
+            try
+            {
+                var cookies = await cookieManager.GetCookiesAsync();
+                DeleteBilibiliCookies(cookies, cookie => cookieManager.DeleteCookie(cookie.Name, cookie.Domain, cookie.Path));
+            }
+            catch (Exception exception)
+            {
+                StartupLog.Append(Localization.Format("UI.BrowserCookieLoginWindow.ReadSignInLogFailed", platform), AppLogLevel.ERROR, Localization.Get("UI.BrowserCookieLoginWindow.LogSource"), exception);
+            }
+        }
+
+        if (!isClosed && ReferenceEquals(webView, currentWebView))
+        {
+            currentWebView.Source = loginService.GetLoginUri(platform);
+        }
+    }
+
+    internal static void DeleteBilibiliCookies(IEnumerable<Cookie> cookies, Action<Cookie> deleteCookie)
+    {
+        foreach (var cookie in cookies.Where(cookie => IsBilibiliDomain(cookie.Domain)))
+        {
+            deleteCookie(cookie);
+        }
+    }
+
+    private static bool IsBilibiliDomain(string domain)
+    {
+        var normalizedDomain = domain.TrimStart('.');
+        return normalizedDomain.Equals("bilibili.com", StringComparison.OrdinalIgnoreCase)
+               || normalizedDomain.EndsWith(".bilibili.com", StringComparison.OrdinalIgnoreCase)
+               || normalizedDomain.Equals("biligame.com", StringComparison.OrdinalIgnoreCase)
+               || normalizedDomain.EndsWith(".biligame.com", StringComparison.OrdinalIgnoreCase);
     }
 
     private void WebView_OnNavigationCompleted(object? sender, WebViewNavigationCompletedEventArgs e)
@@ -217,10 +270,10 @@ public partial class BrowserCookieLoginWindow : Window
 
     private async void Capture_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        await CaptureCookiesAsync(ReadBrowserCookiesAsync);
+        await CaptureCookiesAsync(ReadBrowserCookiesAsync, ShouldClearBilibiliCookies ? DeleteBrowserCookie : null);
     }
 
-    internal async Task CaptureCookiesAsync(Func<Task<IEnumerable<Cookie>>> readCookies)
+    internal async Task CaptureCookiesAsync(Func<Task<IEnumerable<Cookie>>> readCookies, Action<Cookie>? deleteCookie = null)
     {
         if (isClosed || isCapturing)
         {
@@ -240,6 +293,13 @@ public partial class BrowserCookieLoginWindow : Window
             }
 
             var result = loginService.CreateResult(platform, cookies);
+
+            if (deleteCookie is not null)
+            {
+                // 只清本地 Cookie，不在页面退出登录，否则 B 站会在服务端注销刚抓取的 SESSDATA。
+                DeleteBilibiliCookies(cookies, deleteCookie);
+            }
+
             Close(result);
         }
         catch (Exception exception)
@@ -275,5 +335,10 @@ public partial class BrowserCookieLoginWindow : Window
                             ?? throw LocalizedExceptionText.Create("UI.BrowserCookieLoginWindow.CookieReadingUnsupported",
                                 message => new InvalidOperationException(message));
         return await cookieManager.GetCookiesAsync();
+    }
+
+    private void DeleteBrowserCookie(Cookie cookie)
+    {
+        webView?.TryGetCookieManager()?.DeleteCookie(cookie.Name, cookie.Domain, cookie.Path);
     }
 }

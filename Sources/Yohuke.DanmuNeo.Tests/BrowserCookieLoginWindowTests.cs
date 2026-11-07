@@ -43,6 +43,92 @@ public class BrowserCookieLoginWindowTests
     }
 
     /// <summary>
+    /// WPE 不设置数据目录，避免上游把 CookieManager 绑定到未使用的会话。
+    /// </summary>
+    [AvaloniaFact]
+    public void WpeLoginKeepsDefaultNetworkSession()
+    {
+        var window = new BrowserCookieLoginWindow();
+        var wpe = CreateEnvironment<LinuxWpeWebViewEnvironmentRequestedEventArgs>();
+
+        try
+        {
+            window.ConfigureBrowserEnvironment(wpe);
+
+            Assert.Null(wpe.DataDirectory);
+            Assert.Null(wpe.CacheDirectory);
+            Assert.False(wpe.EnableDevTools);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// WPE 下 B 站抓取成功后只删除 B 站域 Cookie。
+    /// </summary>
+    [AvaloniaFact]
+    public async Task WpeCaptureDeletesOnlyBilibiliCookies()
+    {
+        var owner = new Window();
+        var window = CreateOfflineWindow();
+        var deleted = new List<Cookie>();
+        Cookie[] cookies =
+        [
+            new("SESSDATA", "test-session", "/", ".bilibili.com"),
+            new("bili_jct", "test-csrf", "/", ".bilibili.com"),
+            new("DedeUserID", "42", "/", ".bilibili.com"),
+            new("SESSDATA", "cross-domain", "/", "passport.biligame.com"),
+            new("uin", "10001", "/", ".qq.com")
+        ];
+
+        try
+        {
+            owner.Show();
+            var resultTask = window.ShowDialog<BrowserCookieLoginResult?>(owner);
+            await window.CaptureCookiesAsync(() => Task.FromResult<IEnumerable<Cookie>>(cookies), deleted.Add);
+
+            Assert.NotNull(await resultTask);
+            Assert.Equal(4, deleted.Count);
+            Assert.DoesNotContain(deleted, cookie => cookie.Domain == ".qq.com");
+            Assert.Contains(deleted, cookie => cookie is { Name: "SESSDATA", Domain: "passport.biligame.com", Path: "/" });
+        }
+        finally
+        {
+            window.Close();
+            owner.Close();
+        }
+    }
+
+    /// <summary>
+    /// 抓取失败时不删除浏览器 Cookie，便于用户重试。
+    /// </summary>
+    [AvaloniaFact]
+    public async Task FailedCaptureDoesNotDeleteCookies()
+    {
+        var owner = new Window();
+        var window = CreateOfflineWindow();
+        var deleted = new List<Cookie>();
+
+        try
+        {
+            owner.Show();
+            _ = window.ShowDialog<BrowserCookieLoginResult?>(owner);
+            await window.CaptureCookiesAsync(
+                () => Task.FromResult<IEnumerable<Cookie>>([new("buvid3", "device", "/", ".bilibili.com")]),
+                deleted.Add);
+
+            Assert.Empty(deleted);
+        }
+        finally
+        {
+            window.Close();
+            owner.Close();
+        }
+    }
+
+    /// <summary>
     /// 初始化浏览器失败时保留错误占位，关闭时释放宿主。
     /// </summary>
     [AvaloniaFact]
